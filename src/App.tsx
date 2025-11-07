@@ -1,19 +1,16 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableFooter } from '@/components/ui/table'
 import { Download, Loader2, RefreshCw } from 'lucide-react'
 import { useLocalStorage } from './hooks/useLocalStorage'
-import { EditableCell } from './components/EditableCell'
 import { ConfigSection } from './components/ConfigSection'
 import { SprintInfo } from './components/SprintInfo'
 import { UserBreakdown } from './components/UserBreakdown'
 import { SummaryTable } from './components/SummaryTable'
 import { AppHeader } from './components/AppHeader'
 import { jiraService } from './services/jiraService'
-import type { Ticket, UserSummary, SprintData } from './types'
+import type { SprintData, JiraSprint } from './types'
 
 function App() {
   const [config, setConfig] = useLocalStorage('jira-config', {
@@ -26,27 +23,108 @@ function App() {
   })
 
   const [sprintData, setSprintData] = useLocalStorage<SprintData | null>('sprint-data', null)
-  const [loading, setLoading] = useState(false)
+  const [availableSprints, setAvailableSprints] = useState<JiraSprint[]>([])
+  const [selectedSprintId, setSelectedSprintId] = useLocalStorage<number | null>('selected-sprint-id', null)
+  const [loadingSprints, setLoadingSprints] = useState(false)
+  const [loadingSprintData, setLoadingSprintData] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const loadJiraData = async () => {
+  const previousConfig = useRef({ boardId: config.boardId, jiraDomain: config.jiraDomain })
+
+  useEffect(() => {
+    const prev = previousConfig.current
+
+    if (prev.boardId !== config.boardId || prev.jiraDomain !== config.jiraDomain) {
+      setAvailableSprints([])
+      setSelectedSprintId(null)
+      setSprintData(null)
+    }
+
+    previousConfig.current = { boardId: config.boardId, jiraDomain: config.jiraDomain }
+  }, [config.boardId, config.jiraDomain])
+
+  const loadAvailableSprints = async () => {
     if (!config.jiraDomain || !config.email || !config.apiToken) {
       setError('Please fill in all required fields')
       return
     }
 
-    setLoading(true)
+    setLoadingSprints(true)
+    setError(null)
+    setAvailableSprints([])
+
+    try {
+      const sprints = await jiraService.fetchBoardSprints(config)
+      setAvailableSprints(sprints)
+
+      if (sprints.length === 0) {
+        setSelectedSprintId(null)
+        setError('No sprints found for this board')
+        return
+      }
+
+      const preferredSprint =
+        (selectedSprintId && sprints.find(sprint => sprint.id === selectedSprintId)) ||
+        sprints.find(sprint => sprint.state?.toLowerCase() === 'active') ||
+        sprints[0]
+
+      setSelectedSprintId(preferredSprint.id)
+    } catch (err: any) {
+      setError(err.message || 'Failed to load sprints')
+      console.error('Error loading sprints:', err)
+    } finally {
+      setLoadingSprints(false)
+    }
+  }
+
+  const loadSprintData = async () => {
+    if (!config.jiraDomain || !config.email || !config.apiToken) {
+      setError('Please fill in all required fields')
+      return
+    }
+
+    if (!selectedSprintId) {
+      setError('Please select a sprint to load')
+      return
+    }
+
+    setLoadingSprintData(true)
     setError(null)
 
     try {
-      const data = await jiraService.fetchSprintData(config)
+      const data = await jiraService.fetchSprintData(config, selectedSprintId)
       setSprintData(data)
     } catch (err: any) {
       setError(err.message || 'Failed to load Jira data')
       console.error('Error loading Jira data:', err)
     } finally {
-      setLoading(false)
+      setLoadingSprintData(false)
     }
+  }
+
+  const handleSprintChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = event.target.value
+    if (!value) {
+      setSelectedSprintId(null)
+      return
+    }
+
+    const sprintId = Number(value)
+    if (!Number.isNaN(sprintId)) {
+      setSelectedSprintId(sprintId)
+    }
+  }
+
+  const getSprintLabel = (sprint: JiraSprint) => {
+    const start = sprint.startDate ? new Date(sprint.startDate) : null
+    const end = sprint.endDate ? new Date(sprint.endDate) : null
+    const dateFormatter = Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
+    const startText = start ? dateFormatter.format(start) : null
+    const endText = end ? dateFormatter.format(end) : null
+    const dateRange = startText && endText ? `${startText} - ${endText}` : startText ?? endText ?? ''
+    const stateText = sprint.state ? sprint.state.charAt(0).toUpperCase() + sprint.state.slice(1).toLowerCase() : ''
+    const metaParts = [stateText, dateRange].filter(Boolean)
+    return metaParts.length > 0 ? `${sprint.name} (${metaParts.join(' | ')})` : sprint.name
   }
 
   const updateSprintData = (updates: Partial<SprintData>) => {
@@ -164,22 +242,63 @@ function App() {
               <ConfigSection config={config} setConfig={setConfig} />
             </div>
 
-            <div className="flex gap-4 justify-center animate-slide-in-right animate-delay-300">
+            <div className="flex flex-col gap-4 items-center justify-center animate-slide-in-right animate-delay-300 md:flex-row">
               <Button
-                onClick={loadJiraData}
-                disabled={loading}
+                onClick={loadAvailableSprints}
+                disabled={loadingSprints || loadingSprintData}
                 size="lg"
                 className="bg-[#79BC9E] hover:bg-[#6aa88a] text-white font-heading transition-smooth hover-lift"
               >
-                {loading ? (
+                {loadingSprints ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Loading...
+                    Loading Sprints...
                   </>
                 ) : (
                   <>
                     <RefreshCw className="mr-2 h-4 w-4" />
-                    Load Jira Info
+                    Fetch Sprints
+                  </>
+                )}
+              </Button>
+
+              <div className="flex flex-col items-center gap-2 md:flex-row">
+                <Label htmlFor="sprint-select" className="text-[#455453] font-medium">
+                  Sprint
+                </Label>
+                <select
+                  id="sprint-select"
+                  className="min-w-[220px] rounded-md border border-[#A4C6B0] bg-white px-3 py-2 text-[#455453] shadow-sm focus:outline-none focus:ring-2 focus:ring-[#79BC9E] disabled:cursor-not-allowed disabled:opacity-60"
+                  value={selectedSprintId !== null ? String(selectedSprintId) : ''}
+                  onChange={handleSprintChange}
+                  disabled={availableSprints.length === 0 || loadingSprints}
+                >
+                  <option value="" disabled>
+                    {loadingSprints ? 'Loading...' : 'Select sprint'}
+                  </option>
+                  {availableSprints.map(sprint => (
+                    <option key={sprint.id} value={String(sprint.id)}>
+                      {getSprintLabel(sprint)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <Button
+                onClick={loadSprintData}
+                disabled={loadingSprintData || !selectedSprintId}
+                size="lg"
+                className="bg-[#79BC9E] hover:bg-[#6aa88a] text-white font-heading transition-smooth hover-lift disabled:opacity-60"
+              >
+                {loadingSprintData ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Loading Data...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Load Sprint Data
                   </>
                 )}
               </Button>

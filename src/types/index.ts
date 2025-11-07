@@ -37,6 +37,7 @@ export interface TableHeaders {
 }
 
 export interface SprintData {
+  sprintId?: number
   sprintName: string
   sprintStart: string
   sprintEnd: string
@@ -49,5 +50,13 @@ export interface SprintData {
     'All Hours': number
     'All Hours (fmt)': string
   }
+}
+
+export interface JiraSprint {
+  id: number
+  name: string
+  state: string
+  startDate?: string
+  endDate?: string
 }
 

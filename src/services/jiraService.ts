@@ -1,5 +1,5 @@
 import { formatHours, parseDate, formatDate } from '../utils/formatHours'
-import type { SprintData } from '../types'
+import type { SprintData, JiraSprint } from '../types'
 
 export interface Config {
   jiraDomain: string
@@ -55,37 +55,166 @@ async function jiraRequest(url: string, email: string, apiToken: string): Promis
   return response.json()
 }
 
+const SPRINT_STATE_ORDER: Record<string, number> = {
+  active: 0,
+  future: 1,
+  closed: 2,
+}
+
+function normalizeSprint(raw: any): JiraSprint {
+  return {
+    id: raw.id,
+    name: raw.name,
+    state: raw.state,
+    startDate: raw.startDate,
+    endDate: raw.endDate,
+  }
+}
+
+async function getBoardSprints(
+  boardId: number,
+  jiraDomain: string,
+  email: string,
+  apiToken: string
+): Promise<JiraSprint[]> {
+  const sprints: JiraSprint[] = []
+  const maxResults = 50
+  let startAt = 0
+  let isLast = false
+
+  while (!isLast) {
+    const url = `${jiraDomain}/rest/agile/1.0/board/${boardId}/sprint?startAt=${startAt}&maxResults=${maxResults}&state=active,future,closed`
+    const data = await jiraRequest(url, email, apiToken)
+
+    if (Array.isArray(data.values)) {
+      sprints.push(...data.values.map(normalizeSprint))
+      if (data.values.length < maxResults) {
+        isLast = true
+      }
+    } else {
+      isLast = true
+    }
+
+    if (data.isLast === true) {
+      isLast = true
+    }
+
+    startAt += maxResults
+  }
+
+  return sprints.sort((a, b) => {
+    const stateA = SPRINT_STATE_ORDER[a.state?.toLowerCase() || ''] ?? 99
+    const stateB = SPRINT_STATE_ORDER[b.state?.toLowerCase() || ''] ?? 99
+    if (stateA !== stateB) return stateA - stateB
+
+    const dateA = a.startDate || a.endDate
+    const dateB = b.startDate || b.endDate
+    const timeA = dateA ? new Date(dateA).getTime() : 0
+    const timeB = dateB ? new Date(dateB).getTime() : 0
+    return timeB - timeA
+  })
+}
+
 async function getActiveSprint(boardId: number, jiraDomain: string, email: string, apiToken: string) {
-  const url = `${jiraDomain}/rest/agile/1.0/board/${boardId}/sprint`
-  const data = await jiraRequest(url, email, apiToken)
-  
-  // First, try to find an active sprint
-  const activeSprint = data.values.find((s: any) => s.state.toLowerCase() === 'active')
+  const sprints = await getBoardSprints(boardId, jiraDomain, email, apiToken)
+
+  const activeSprint = sprints.find(s => s.state?.toLowerCase() === 'active')
   if (activeSprint) {
     return activeSprint
   }
-  
-  // If no active sprint, find the most recently closed sprint
-  const closedSprints = data.values
-    .filter((s: any) => s.state.toLowerCase() === 'closed')
-    .sort((a: any, b: any) => {
-      // Sort by end date, most recent first
-      const dateA = b.endDate ? new Date(b.endDate).getTime() : 0
-      const dateB = a.endDate ? new Date(a.endDate).getTime() : 0
-      return dateA - dateB
+
+  const closedSprints = sprints
+    .filter(s => s.state?.toLowerCase() === 'closed')
+    .sort((a, b) => {
+      const dateA = a.endDate ? new Date(a.endDate).getTime() : 0
+      const dateB = b.endDate ? new Date(b.endDate).getTime() : 0
+      return dateB - dateA
     })
-  
+
   if (closedSprints.length > 0) {
     return closedSprints[0]
   }
-  
+
   throw new Error('❌ No active or closed sprints found for this board.')
 }
 
+async function getSprintDetails(sprintId: number, jiraDomain: string, email: string, apiToken: string): Promise<JiraSprint> {
+  const url = `${jiraDomain}/rest/agile/1.0/sprint/${sprintId}`
+  const data = await jiraRequest(url, email, apiToken)
+  return normalizeSprint(data)
+}
+
 async function getIssuesForSprint(sprintId: number, jiraDomain: string, email: string, apiToken: string) {
+  // Fetch all issues from sprint - this should include subtasks by default
+  // However, some board configurations might filter them out, so we'll also fetch subtasks explicitly
   const url = `${jiraDomain}/rest/agile/1.0/sprint/${sprintId}/issue?maxResults=1000`
   const data = await jiraRequest(url, email, apiToken)
-  return data.issues || []
+  let issues = data.issues || []
+  
+  // Track which subtasks we already have
+  const existingSubtaskKeys = new Set(
+    issues
+      .filter((issue: any) => issue.fields?.issuetype?.subtask === true)
+      .map((issue: any) => issue.key)
+  )
+  
+  // Get all parent issues and collect their subtask keys
+  const parentIssues = issues.filter((issue: any) => issue.fields?.issuetype?.subtask !== true)
+  const subtaskKeysToFetch: string[] = []
+  
+  // First pass: collect all subtask keys from parent issues
+  for (const parentIssue of parentIssues) {
+    try {
+      const subtasksUrl = `${jiraDomain}/rest/api/3/issue/${parentIssue.key}?fields=subtasks`
+      const parentData = await jiraRequest(subtasksUrl, email, apiToken)
+      
+      if (parentData.fields?.subtasks && Array.isArray(parentData.fields.subtasks)) {
+        for (const subtask of parentData.fields.subtasks) {
+          if (!existingSubtaskKeys.has(subtask.key) && !subtaskKeysToFetch.includes(subtask.key)) {
+            subtaskKeysToFetch.push(subtask.key)
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(`Could not fetch subtasks for ${parentIssue.key}:`, error)
+    }
+  }
+  
+  // Second pass: fetch all missing subtasks
+  // Use JQL search to fetch multiple subtasks at once (more efficient)
+  if (subtaskKeysToFetch.length > 0) {
+    try {
+      // JQL query to fetch all subtasks at once
+      const keysQuery = subtaskKeysToFetch.map(key => `key = ${key}`).join(' OR ')
+      const searchUrl = `${jiraDomain}/rest/api/3/search?jql=${encodeURIComponent(keysQuery)}&maxResults=1000`
+      const searchData = await jiraRequest(searchUrl, email, apiToken)
+      
+      if (searchData.issues && Array.isArray(searchData.issues)) {
+        issues.push(...searchData.issues)
+        console.log(`Fetched ${searchData.issues.length} additional subtasks`)
+      }
+    } catch (error) {
+      console.warn('Could not batch fetch subtasks, falling back to individual requests:', error)
+      // Fallback: fetch subtasks individually
+      for (const subtaskKey of subtaskKeysToFetch) {
+        try {
+          const subtaskUrl = `${jiraDomain}/rest/api/3/issue/${subtaskKey}`
+          const subtaskData = await jiraRequest(subtaskUrl, email, apiToken)
+          issues.push(subtaskData)
+        } catch (err) {
+          console.warn(`Could not fetch subtask ${subtaskKey}:`, err)
+        }
+      }
+    }
+  }
+  
+  // Log for debugging
+  const subtaskCount = issues.filter((issue: any) => issue.fields?.issuetype?.subtask === true).length
+  if (subtaskCount > 0) {
+    console.log(`Total subtasks found: ${subtaskCount}`)
+  }
+  
+  return issues
 }
 
 async function getWorklogs(
@@ -103,11 +232,17 @@ async function getWorklogs(
     const users: Record<string, number> = {}
     const sprintStartDate = parseDate(sprintStart)
     const sprintEndDate = parseDate(sprintEnd)
+    const inclusiveEnd = new Date(sprintEndDate.getTime())
+
+    // If end date string does not include time information, treat it as end of day (23:59:59.999)
+    if (!/T\d{2}:\d{2}/.test(sprintEnd)) {
+      inclusiveEnd.setHours(23, 59, 59, 999)
+    }
     
     if (data.worklogs) {
       data.worklogs.forEach((log: any) => {
         const logDate = parseDate(log.started)
-        if (logDate >= sprintStartDate && logDate <= sprintEndDate) {
+        if (logDate >= sprintStartDate && logDate <= inclusiveEnd) {
           const user = log.author.displayName
           const hours = log.timeSpentSeconds / 3600
           users[user] = (users[user] || 0) + hours
@@ -204,8 +339,20 @@ function getStoryPoints(issue: any): number {
   return 0
 }
 
-export async function fetchSprintData(config: Config): Promise<SprintData> {
-  const sprint = await getActiveSprint(config.boardId, config.jiraDomain, config.email, config.apiToken)
+export async function fetchSprintData(config: Config, sprintId?: number): Promise<SprintData> {
+  let sprint = sprintId
+    ? await getSprintDetails(sprintId, config.jiraDomain, config.email, config.apiToken)
+    : await getActiveSprint(config.boardId, config.jiraDomain, config.email, config.apiToken)
+
+  if (!sprint.startDate || !sprint.endDate) {
+    const detailedSprint = await getSprintDetails(sprint.id, config.jiraDomain, config.email, config.apiToken)
+    sprint = { ...sprint, ...detailedSprint }
+  }
+
+  if (!sprint.startDate || !sprint.endDate) {
+    throw new Error(`Sprint ${sprint.name || sprint.id} is missing start or end date information`)
+  }
+
   const issues = await getIssuesForSprint(sprint.id, config.jiraDomain, config.email, config.apiToken)
   
   const userData: Record<string, any[]> = {}
@@ -222,10 +369,25 @@ export async function fetchSprintData(config: Config): Promise<SprintData> {
     const plannedHours = parseFloat(String(storyPoints)) * config.hoursPerSP
     const assignee = issue.fields.assignee?.displayName || 'Unassigned'
 
-    const worklogs = await getWorklogs(key, config.jiraDomain, config.email, config.apiToken, sprint.startDate, sprint.endDate)
+    const worklogs = await getWorklogs(
+      key,
+      config.jiraDomain,
+      config.email,
+      config.apiToken,
+      sprint.startDate,
+      sprint.endDate
+    )
     const comments = await getIssueComments(key, config.jiraDomain, config.email, config.apiToken)
 
-    for (const [worker, hoursLogged] of Object.entries(worklogs)) {
+    const workers = new Set(Object.keys(worklogs))
+    // Ensure the assignee gets a row even with 0 hours
+    if (assignee && assignee !== 'Unassigned') {
+      workers.add(assignee)
+    }
+
+    for (const worker of workers) {
+      const hoursLogged = worklogs[worker as keyof typeof worklogs] ?? 0
+
       if (!userData[worker]) {
         userData[worker] = []
         userSummaries[worker] = {
@@ -235,7 +397,9 @@ export async function fetchSprintData(config: Config): Promise<SprintData> {
       }
 
       const diff = plannedHours - hoursLogged
-      const ticketDisplay = worker === assignee ? key : `${key} (${assignee})`
+      const ticketDisplay = worker === assignee
+        ? key
+        : `${key} (${assignee})`
 
       userData[worker].push({
         Ticket: key,
@@ -276,6 +440,7 @@ export async function fetchSprintData(config: Config): Promise<SprintData> {
   }
 
   return {
+    sprintId: sprint.id,
     sprintName: sprint.name || 'Unnamed Sprint',
     sprintStart: sprint.startDate ? String(sprint.startDate) : '',
     sprintEnd: sprint.endDate ? String(sprint.endDate) : '',
@@ -303,7 +468,12 @@ export async function fetchSprintData(config: Config): Promise<SprintData> {
   }
 }
 
+export async function fetchBoardSprints(config: Config): Promise<JiraSprint[]> {
+  return getBoardSprints(config.boardId, config.jiraDomain, config.email, config.apiToken)
+}
+
 export const jiraService = {
   fetchSprintData,
+  fetchBoardSprints,
 }
 
