@@ -2,6 +2,7 @@ export interface Ticket {
   Ticket: string
   'Ticket Display': string
   Summary: string
+  Status: string
   'Story Points': number
   'Hours Logged': number
   'Hours Logged (fmt)': string
@@ -22,6 +23,7 @@ export interface TableHeaders {
   ticketTable: {
     ticket: string
     summary: string
+    status: string
     storyPoints: string
     hoursLogged: string
     difference: string

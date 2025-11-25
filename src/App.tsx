@@ -137,6 +137,7 @@ function App() {
           ticketTable: {
             ticket: 'Ticket',
             summary: 'Summary',
+            status: 'Status',
             storyPoints: 'Story Points',
             hoursLogged: 'Hours Logged',
             difference: 'Difference',
@@ -162,6 +163,7 @@ function App() {
       ticketTable: {
         ticket: 'Ticket',
         summary: 'Summary',
+        status: 'Status',
         storyPoints: 'Story Points',
         hoursLogged: 'Hours Logged',
         difference: 'Difference',
@@ -180,9 +182,9 @@ function App() {
     
     for (const [user, tickets] of Object.entries(sprintData.userData)) {
       csv += `${user}\n`
-      csv += `${headers.ticketTable.ticket},${headers.ticketTable.summary},${headers.ticketTable.storyPoints},${headers.ticketTable.hoursLogged},${headers.ticketTable.difference},${headers.ticketTable.comments}\n`
+      csv += `${headers.ticketTable.ticket},${headers.ticketTable.summary},${headers.ticketTable.status},${headers.ticketTable.storyPoints},${headers.ticketTable.hoursLogged},${headers.ticketTable.difference},${headers.ticketTable.comments}\n`
       tickets.forEach(t => {
-        csv += `"${t['Ticket Display']}","${t.Summary}",${t['Story Points']},${t['Hours Logged (fmt)']},${t['Difference (fmt)']},"${t.Comments.replace(/"/g, '""')}"\n`
+        csv += `"${t['Ticket Display']}","${t.Summary}","${t.Status}",${t['Story Points']},${t['Hours Logged (fmt)']},${t['Difference (fmt)']},"${t.Comments.replace(/"/g, '""')}"\n`
       })
       csv += `Total for ${user},,${sprintData.userSummaries[user]['Own Story Points']},${sprintData.userSummaries[user]['Total Hours (fmt)']},,\n\n`
     }

@@ -166,6 +166,23 @@ export function UserBreakdown({
               </TableHead>
               <TableHead>
                 <EditableCell
+                  value={sprintData.headers?.ticketTable?.status || 'Status'}
+                  onSave={(val) => {
+                    updateSprintData({
+                      headers: {
+                        ...sprintData.headers,
+                        ticketTable: {
+                          ...sprintData.headers?.ticketTable,
+                          status: String(val),
+                        },
+                      },
+                    })
+                  }}
+                  className="font-semibold text-white hover:text-white hover:bg-white/20"
+                />
+              </TableHead>
+              <TableHead>
+                <EditableCell
                   value={sprintData.headers?.ticketTable?.storyPoints || 'Story Points'}
                   onSave={(val) => {
                     updateSprintData({
@@ -254,6 +271,12 @@ export function UserBreakdown({
                 </TableCell>
                 <TableCell>
                   <EditableCell
+                    value={ticket.Status}
+                    onSave={(val) => updateTicket(index, 'Status', String(val))}
+                  />
+                </TableCell>
+                <TableCell>
+                  <EditableCell
                     value={ticket['Story Points']}
                     onSave={(val) => updateTicket(index, 'Story Points', Number(val))}
                     type="number"
@@ -295,7 +318,7 @@ export function UserBreakdown({
               </TableRow>
             ))}
             <TableRow className="bg-muted/50 font-semibold">
-              <TableCell colSpan={2}>
+              <TableCell colSpan={3}>
                 <EditableCell
                   value={`Total for ${user}`}
                   onSave={(val) => {

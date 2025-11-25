@@ -363,6 +363,7 @@ export async function fetchSprintData(config: Config, sprintId?: number): Promis
   for (const issue of issues) {
     const key = issue.key
     const summary = issue.fields.summary || 'No summary'
+    const status = issue.fields.status?.name || 'Unknown'
     const storyPointsRaw = getStoryPoints(issue)
     // Ensure story points is always a number
     const storyPoints = typeof storyPointsRaw === 'number' ? storyPointsRaw : (parseFloat(String(storyPointsRaw)) || 0)
@@ -405,6 +406,7 @@ export async function fetchSprintData(config: Config, sprintId?: number): Promis
         Ticket: key,
         'Ticket Display': ticketDisplay,
         Summary: summary,
+        Status: status,
         'Story Points': storyPoints,
         'Hours Logged': hoursLogged,
         'Hours Logged (fmt)': formatHours(hoursLogged),
@@ -451,6 +453,7 @@ export async function fetchSprintData(config: Config, sprintId?: number): Promis
       ticketTable: {
         ticket: 'Ticket',
         summary: 'Summary',
+        status: 'Status',
         storyPoints: 'Story Points',
         hoursLogged: 'Hours Logged',
         difference: 'Difference',
