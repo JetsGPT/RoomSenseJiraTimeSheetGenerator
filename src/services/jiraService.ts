@@ -17,7 +17,7 @@ function getAuthHeader(email: string, apiToken: string): string {
 
 async function jiraRequest(url: string, email: string, apiToken: string): Promise<any> {
   const useProxy = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  
+
   if (useProxy) {
     try {
       const response = await fetch('/api/jira-proxy', {
@@ -78,7 +78,7 @@ async function getBoardSprints(
   apiToken: string
 ): Promise<JiraSprint[]> {
   const sprints: JiraSprint[] = []
-  const maxResults = 50
+  const maxResults = 300
   let startAt = 0
   let isLast = false
 
@@ -150,24 +150,24 @@ async function getIssuesForSprint(sprintId: number, jiraDomain: string, email: s
   const url = `${jiraDomain}/rest/agile/1.0/sprint/${sprintId}/issue?maxResults=1000`
   const data = await jiraRequest(url, email, apiToken)
   let issues = data.issues || []
-  
+
   // Track which subtasks we already have
   const existingSubtaskKeys = new Set(
     issues
       .filter((issue: any) => issue.fields?.issuetype?.subtask === true)
       .map((issue: any) => issue.key)
   )
-  
+
   // Get all parent issues and collect their subtask keys
   const parentIssues = issues.filter((issue: any) => issue.fields?.issuetype?.subtask !== true)
   const subtaskKeysToFetch: string[] = []
-  
+
   // First pass: collect all subtask keys from parent issues
   for (const parentIssue of parentIssues) {
     try {
       const subtasksUrl = `${jiraDomain}/rest/api/3/issue/${parentIssue.key}?fields=subtasks`
       const parentData = await jiraRequest(subtasksUrl, email, apiToken)
-      
+
       if (parentData.fields?.subtasks && Array.isArray(parentData.fields.subtasks)) {
         for (const subtask of parentData.fields.subtasks) {
           if (!existingSubtaskKeys.has(subtask.key) && !subtaskKeysToFetch.includes(subtask.key)) {
@@ -179,7 +179,7 @@ async function getIssuesForSprint(sprintId: number, jiraDomain: string, email: s
       console.warn(`Could not fetch subtasks for ${parentIssue.key}:`, error)
     }
   }
-  
+
   // Second pass: fetch all missing subtasks
   // Use JQL search to fetch multiple subtasks at once (more efficient)
   if (subtaskKeysToFetch.length > 0) {
@@ -188,7 +188,7 @@ async function getIssuesForSprint(sprintId: number, jiraDomain: string, email: s
       const keysQuery = subtaskKeysToFetch.map(key => `key = ${key}`).join(' OR ')
       const searchUrl = `${jiraDomain}/rest/api/3/search?jql=${encodeURIComponent(keysQuery)}&maxResults=1000`
       const searchData = await jiraRequest(searchUrl, email, apiToken)
-      
+
       if (searchData.issues && Array.isArray(searchData.issues)) {
         issues.push(...searchData.issues)
         console.log(`Fetched ${searchData.issues.length} additional subtasks`)
@@ -207,13 +207,13 @@ async function getIssuesForSprint(sprintId: number, jiraDomain: string, email: s
       }
     }
   }
-  
+
   // Log for debugging
   const subtaskCount = issues.filter((issue: any) => issue.fields?.issuetype?.subtask === true).length
   if (subtaskCount > 0) {
     console.log(`Total subtasks found: ${subtaskCount}`)
   }
-  
+
   return issues
 }
 
@@ -228,7 +228,7 @@ async function getWorklogs(
   try {
     const url = `${jiraDomain}/rest/api/3/issue/${issueKey}/worklog`
     const data = await jiraRequest(url, email, apiToken)
-    
+
     const users: Record<string, number> = {}
     const sprintStartDate = parseDate(sprintStart)
     const sprintEndDate = parseDate(sprintEnd)
@@ -238,7 +238,7 @@ async function getWorklogs(
     if (!/T\d{2}:\d{2}/.test(sprintEnd)) {
       inclusiveEnd.setHours(23, 59, 59, 999)
     }
-    
+
     if (data.worklogs) {
       data.worklogs.forEach((log: any) => {
         const logDate = parseDate(log.started)
@@ -249,7 +249,7 @@ async function getWorklogs(
         }
       })
     }
-    
+
     return users
   } catch (error) {
     console.warn(`Could not fetch worklogs for ${issueKey}:`, error)
@@ -261,16 +261,16 @@ async function getIssueComments(issueKey: string, jiraDomain: string, email: str
   try {
     const url = `${jiraDomain}/rest/api/3/issue/${issueKey}/comment`
     const data = await jiraRequest(url, email, apiToken)
-    
+
     if (!data.comments || data.comments.length === 0) {
       return '-'
     }
-    
+
     return data.comments
       .map((c: any) => {
         const author = c.author.displayName
         const date = formatDate(parseDate(c.created))
-        
+
         // Handle comment body - it might be a string or an object (ADF format)
         let body = ''
         if (typeof c.body === 'string') {
@@ -291,7 +291,7 @@ async function getIssueComments(issueKey: string, jiraDomain: string, email: str
             body = JSON.stringify(c.body).substring(0, 100) // Fallback: show first 100 chars of JSON
           }
         }
-        
+
         return `[${author}] (${date}): ${body}`
       })
       .join(' || ')
@@ -303,7 +303,7 @@ async function getIssueComments(issueKey: string, jiraDomain: string, email: str
 
 function getStoryPoints(issue: any): number {
   const customFields = issue.fields
-  
+
   // Try common story point custom field IDs
   const possibleFields = [
     customFields.customfield_10016,
@@ -313,15 +313,15 @@ function getStoryPoints(issue: any): number {
     customFields.storyPoints,
     customFields['Story Points'],
   ]
-  
+
   for (const field of possibleFields) {
     if (field === null || field === undefined) continue
-    
+
     // If it's a number, return it
     if (typeof field === 'number') {
       return field
     }
-    
+
     // If it's a string that can be parsed as a number
     if (typeof field === 'string') {
       const parsed = parseFloat(field)
@@ -329,13 +329,13 @@ function getStoryPoints(issue: any): number {
         return parsed
       }
     }
-    
+
     // If it's an object/array, skip it (don't return sprints array)
     if (typeof field === 'object') {
       continue
     }
   }
-  
+
   return 0
 }
 
@@ -354,7 +354,7 @@ export async function fetchSprintData(config: Config, sprintId?: number): Promis
   }
 
   const issues = await getIssuesForSprint(sprint.id, config.jiraDomain, config.email, config.apiToken)
-  
+
   const userData: Record<string, any[]> = {}
   const userSummaries: Record<string, any> = {}
   let totalStoryPoints = 0
